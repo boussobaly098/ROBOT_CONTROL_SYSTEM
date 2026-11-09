@@ -59,9 +59,9 @@ class InterfaceGraphique:
         self.fenetre.after(100, self.actualiser)
         self.fenetre.after(200, self.boucle_trace)
 
-    # ==========================================
-    # CREATION DE L'INTERFACE
-    # ==========================================
+    
+    # Pour creer l'interface
+
 
     def creer_interface(self):
 
@@ -89,7 +89,7 @@ class InterfaceGraphique:
         # Barre d'état : tous les messages du système s'affichent ici
         self.label_statut = tk.Label(
             zone_simulation,
-            text="Système prêt (v4)",
+            text="Système prêt",
             bg=self.PANNEAU,
             fg=self.VERT,
             font=("Arial", 11, "bold"),
@@ -200,9 +200,9 @@ class InterfaceGraphique:
 
         self.canvas_commandes.yview_scroll(sens, "units")
 
-    # ==========================================
-    # CREATION DES COMMANDES
-    # ==========================================
+    
+    # Pour creer des commendes
+    
 
     def creer_commandes(self, panneau):
 
@@ -470,9 +470,9 @@ class InterfaceGraphique:
 
         return bouton
 
-    # ==========================================
-    # OUTILS
-    # ==========================================
+    
+    # Outils
+    
 
     def formater(self, valeur):
         """Affiche 450 au lieu de 450.0."""
@@ -516,9 +516,9 @@ class InterfaceGraphique:
 
         self.rafraichir_historique()
 
-    # ==========================================
-    # PROJECTION DES COORDONNEES 3D
-    # ==========================================
+
+    #Projection concernant les coordonnees
+
 
     def projeter(self, x, y, z):
 
@@ -533,9 +533,9 @@ class InterfaceGraphique:
 
         return ecran_x, ecran_y
 
-    # ==========================================
-    # DESSIN DE L'ENVIRONNEMENT
-    # ==========================================
+
+    # Dessin de l'environnement
+    
 
     def dessiner_simulation(self):
 
@@ -643,9 +643,9 @@ class InterfaceGraphique:
             font=("Arial", 12, "bold")
         )
 
-    # ==========================================
-    # DESSIN DE LA DESTINATION ET DU TRAJET
-    # ==========================================
+    
+    # Dessin pour la destination et pour le trajet
+
 
     def dessiner_destination(self):
 
@@ -771,9 +771,8 @@ class InterfaceGraphique:
             dash=(2, 5)
         )
 
-    # ==========================================
-    # DESSIN DU ROBOT ET DU CAPTEUR
-    # ==========================================
+
+    # Dessin du robot et celui du capteur
 
     def dessiner_robot(self):
 
@@ -886,9 +885,9 @@ class InterfaceGraphique:
             font=("Arial", 10, "bold")
         )
 
-    # ==========================================
-    # MISE A JOUR DES INFORMATIONS
-    # ==========================================
+    
+    # Pour faire la mise a jour des informations
+
 
     def mettre_a_jour_informations(self):
 
@@ -946,9 +945,9 @@ class InterfaceGraphique:
             fg=couleur
         )
 
-    # ==========================================
-    # COMMANDES MANUELLES
-    # ==========================================
+    
+    # Pour les commendes manuelles
+
 
     def commander(self, action):
 
@@ -1022,9 +1021,9 @@ class InterfaceGraphique:
 
         self.actualiser()
 
-    # ==========================================
-    # MODE AUTOMATIQUE
-    # ==========================================
+    
+    # Mode automatique
+
 
     def activer_automatique(self, reprise=False):
 
@@ -1209,9 +1208,9 @@ class InterfaceGraphique:
         self.automatique.desactiver()
         self.bouton_auto.config(text="MODE AUTOMATIQUE")
 
-    # ==========================================
-    # ARRET D'URGENCE ET REPRISE
-    # ==========================================
+    
+    # arret d'urgence et reprise
+    
 
     def arreter(self):
 
@@ -1245,9 +1244,9 @@ class InterfaceGraphique:
 
         self.actualiser()
 
-    # ==========================================
-    # REINITIALISATION
-    # ==========================================
+    
+    # C'est pour reinitialiser le robot
+    
 
     def reinitialiser(self):
 
@@ -1270,9 +1269,9 @@ class InterfaceGraphique:
 
         self.actualiser()
 
-    # ==========================================
-    # ACTUALISATION GENERALE
-    # ==========================================
+    
+    # Actualisation generale
+    
 
     def actualiser(self):
 
@@ -1283,9 +1282,8 @@ class InterfaceGraphique:
         self.dessiner_robot()
         self.mettre_a_jour_informations()
 
-    # ==========================================
-    # MESSAGE DE STATUT
-    # ==========================================
+    # Message de statut
+
 
     def afficher_statut(self, message, couleur):
 
@@ -1294,9 +1292,9 @@ class InterfaceGraphique:
             fg=couleur
         )
 
-    # ==========================================
-    # FENETRE D'HISTORIQUE
-    # ==========================================
+    
+    # Fenetre d'historique
+
 
     def ouvrir_historique(self):
 
@@ -1402,9 +1400,9 @@ class InterfaceGraphique:
         self.afficher_statut("Historique effacé.", self.ORANGE)
         self.actualiser()
 
-    # ==========================================
-    # FENETRE DE GESTION DES OBSTACLES
-    # ==========================================
+    
+    #C'est pour la fenetre de gestion des obstacles
+
 
     def ouvrir_obstacles(self):
 
@@ -1604,9 +1602,9 @@ class InterfaceGraphique:
         self.rafraichir_liste_obstacles()
         self.actualiser()
 
-    # ==========================================
-    # FENETRE DE CONFIGURATION
-    # ==========================================
+    
+    # C'est pour la fenetre de configuration
+    
 
     def valeurs_obstacle(self, identifiant, defaut):
         """Valeurs actuelles de l'obstacle (x, y, z, rayon) en texte."""
