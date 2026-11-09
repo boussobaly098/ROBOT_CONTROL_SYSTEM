@@ -1,15 +1,22 @@
 import tkinter as tk
 import math
+import time
 from tkinter import messagebox
+
+from obstacle import Obstacle
+
 
 class InterfaceGraphique:
 
-    def __init__(self, fenetre, robot, capteur, simulation, automatique):
+    def __init__(
+        self, fenetre, robot, capteur, simulation, automatique, historique
+    ):
         self.fenetre = fenetre
         self.robot = robot
         self.capteur = capteur
         self.simulation = simulation
         self.automatique = automatique
+        self.historique = historique
 
         self.FOND = "#0F172A"
         self.PANNEAU = "#1E293B"
@@ -26,15 +33,31 @@ class InterfaceGraphique:
 
         self.auto_en_cours = False
         self.identifiant_boucle = None
+        self.compteur_blocage = 0
+        self.auto_interrompu = False
+        self.trace = []
+        self.trace_affichee = False
         self.position_initiale = (
-    self.robot.x,
-    self.robot.y,
-    self.robot.z
-)
+            self.robot.x,
+            self.robot.y,
+            self.robot.z
+        )
+
+        # Fenêtres secondaires (historique et obstacles)
+        self.fenetre_historique = None
+        self.zone_historique = None
+        self.label_resume_historique = None
+        self.fenetre_obstacles = None
+        self.liste_obstacles = None
 
         self.creer_interface()
-    # Actualiser après la création complète de la fenêtre
+
+        # Première position de l'historique
+        self.enregistrer("Départ", forcer=True)
+
+        # Actualiser après la création complète de la fenêtre
         self.fenetre.after(100, self.actualiser)
+        self.fenetre.after(200, self.boucle_trace)
 
     # ==========================================
     # CREATION DE L'INTERFACE
@@ -63,6 +86,26 @@ class InterfaceGraphique:
             padx=(0, 10)
         )
 
+        # Barre d'état : tous les messages du système s'affichent ici
+        self.label_statut = tk.Label(
+            zone_simulation,
+            text="Système prêt (v4)",
+            bg=self.PANNEAU,
+            fg=self.VERT,
+            font=("Arial", 11, "bold"),
+            anchor="w",
+            justify="left",
+            padx=10,
+            pady=6
+        )
+        self.label_statut.pack(side="bottom", fill="x")
+        self.label_statut.bind(
+            "<Configure>",
+            lambda evenement: self.label_statut.config(
+                wraplength=max(evenement.width - 20, 100)
+            )
+        )
+
         self.canvas = tk.Canvas(
             zone_simulation,
             bg="#111827",
@@ -70,21 +113,93 @@ class InterfaceGraphique:
         )
         self.canvas.pack(fill="both", expand=True, padx=5, pady=5)
         self.canvas.bind(
-        "<Configure>",
-        lambda evenement: self.fenetre.after_idle(self.actualiser)
-)
+            "<Configure>",
+            lambda evenement: self.fenetre.after_idle(self.actualiser)
+        )
 
-        # Panneau de commandes
-        panneau = tk.Frame(
+        # Panneau de commandes avec barre de défilement
+        self.conteneur_commandes = tk.Frame(
             contenu,
             bg=self.PANNEAU,
             width=290
         )
-        panneau.pack(side="right", fill="y")
-        panneau.pack_propagate(False)
+        self.conteneur_commandes.pack(side="right", fill="y")
+        self.conteneur_commandes.pack_propagate(False)
+
+        self.canvas_commandes = tk.Canvas(
+            self.conteneur_commandes,
+            bg=self.PANNEAU,
+            highlightthickness=0,
+            yscrollincrement=20
+        )
+
+        barre = tk.Scrollbar(
+            self.conteneur_commandes,
+            orient="vertical",
+            command=self.canvas_commandes.yview,
+            bg="#475569",
+            troughcolor=self.PANNEAU,
+            activebackground=self.CYAN,
+            highlightthickness=0,
+            bd=0,
+            width=12
+        )
+        self.canvas_commandes.configure(yscrollcommand=barre.set)
+
+        barre.pack(side="right", fill="y")
+        self.canvas_commandes.pack(side="left", fill="both", expand=True)
+
+        panneau = tk.Frame(self.canvas_commandes, bg=self.PANNEAU)
+        fenetre_interne = self.canvas_commandes.create_window(
+            (0, 0), window=panneau, anchor="nw"
+        )
+
+        panneau.bind(
+            "<Configure>",
+            lambda evenement: self.canvas_commandes.configure(
+                scrollregion=self.canvas_commandes.bbox("all")
+            )
+        )
+        self.canvas_commandes.bind(
+            "<Configure>",
+            lambda evenement: self.canvas_commandes.itemconfig(
+                fenetre_interne, width=evenement.width
+            )
+        )
+
+        # Défilement à la molette (Windows, macOS et Linux)
+        self.fenetre.bind_all("<MouseWheel>", self.defiler_commandes)
+        self.fenetre.bind_all("<Button-4>", self.defiler_commandes)
+        self.fenetre.bind_all("<Button-5>", self.defiler_commandes)
 
         self.creer_commandes(panneau)
-        
+
+    def defiler_commandes(self, evenement):
+        """Fait défiler le panneau si la souris est au-dessus."""
+
+        try:
+            widget = self.fenetre.winfo_containing(
+                evenement.x_root, evenement.y_root
+            )
+        except (KeyError, tk.TclError):
+            return
+
+        while widget is not None:
+            if widget == self.conteneur_commandes:
+                break
+            widget = widget.master
+        else:
+            return
+
+        if evenement.num == 4:
+            sens = -1
+        elif evenement.num == 5:
+            sens = 1
+        else:
+            sens = -1 if evenement.delta > 0 else 1
+
+        self.canvas_commandes.yview_scroll(sens, "units")
+
     # ==========================================
     # CREATION DES COMMANDES
     # ==========================================
@@ -191,6 +306,13 @@ class InterfaceGraphique:
             cadre_destination, "Z", "40", 2
         )
 
+        # La destination s'affiche sur la simulation pendant la saisie
+        for entree in (self.entree_x, self.entree_y, self.entree_z):
+            entree.bind(
+                "<KeyRelease>",
+                lambda evenement: self.actualiser()
+            )
+
         self.bouton_auto = tk.Button(
             panneau,
             text="MODE AUTOMATIQUE",
@@ -203,15 +325,31 @@ class InterfaceGraphique:
         )
         self.bouton_auto.pack(fill="x", padx=15, pady=10)
 
-        # Arrêt et réinitialisation
+        # Arrêt, reprise et réinitialisation
         self.creer_bouton(
             panneau, "ARRÊT D'URGENCE", self.arreter,
             self.ROUGE
         )
 
         self.creer_bouton(
+            panneau, "REPRENDRE", self.reprendre,
+            self.VERT
+        )
+
+        self.creer_bouton(
             panneau, "RÉINITIALISER", self.reinitialiser,
             "#475569"
+        )
+
+        # Historique et obstacles
+        self.creer_bouton(
+            panneau, "HISTORIQUE DES DÉPLACEMENTS", self.ouvrir_historique,
+            self.CYAN
+        )
+
+        self.creer_bouton(
+            panneau, "GÉRER LES OBSTACLES", self.ouvrir_obstacles,
+            self.ORANGE
         )
 
         # Informations
@@ -241,6 +379,33 @@ class InterfaceGraphique:
         )
         self.label_direction.pack(pady=4)
 
+        self.label_distance = tk.Label(
+            panneau,
+            text="Distance parcourue : 0.0",
+            bg=self.PANNEAU,
+            fg=self.BLANC,
+            font=("Arial", 10)
+        )
+        self.label_distance.pack(pady=4)
+
+        self.label_nb_positions = tk.Label(
+            panneau,
+            text="Positions enregistrées : 0",
+            bg=self.PANNEAU,
+            fg=self.BLANC,
+            font=("Arial", 10)
+        )
+        self.label_nb_positions.pack(pady=4)
+
+        self.label_etat = tk.Label(
+            panneau,
+            text="Robot : ACTIF",
+            bg=self.PANNEAU,
+            fg=self.VERT,
+            font=("Arial", 10, "bold")
+        )
+        self.label_etat.pack(pady=4)
+
         self.label_capteur = tk.Label(
             panneau,
             text="Capteur : LIBRE",
@@ -250,15 +415,7 @@ class InterfaceGraphique:
         )
         self.label_capteur.pack(pady=4)
 
-        self.label_statut = tk.Label(
-            panneau,
-            text="Système prêt",
-            bg=self.PANNEAU,
-            fg=self.VERT,
-            font=("Arial", 10, "bold"),
-            wraplength=250
-        )
-        self.label_statut.pack(pady=12)
+        tk.Frame(panneau, bg=self.PANNEAU, height=12).pack()
 
     def creer_champ(self, parent, nom, valeur, colonne):
 
@@ -312,6 +469,52 @@ class InterfaceGraphique:
             bouton.pack(fill="x", padx=15, pady=5)
 
         return bouton
+
+    # ==========================================
+    # OUTILS
+    # ==========================================
+
+    def formater(self, valeur):
+        """Affiche 450 au lieu de 450.0."""
+
+        valeur = float(valeur)
+
+        if valeur.is_integer():
+            return str(int(valeur))
+
+        return str(round(valeur, 2))
+
+    def lire_destination(self):
+        """Retourne (x, y, z) si les champs sont valides, sinon None."""
+
+        if not hasattr(self, "entree_z"):
+            return None
+
+        try:
+            return (
+                float(self.entree_x.get()),
+                float(self.entree_y.get()),
+                float(self.entree_z.get())
+            )
+        except ValueError:
+            return None
+
+    def enregistrer(self, action, forcer=False):
+        """Enregistre la position actuelle du robot dans l'historique."""
+
+        x, y, z = self.robot.obtenir_position()
+
+        ajoutee = self.historique.enregistrer_position(
+            x, y, z, action, forcer
+        )
+
+        if forcer:
+            # Départ, réinitialisation, nouveau scénario : trait effacé
+            self.trace = [(x, y, z, time.time())]
+        elif ajoutee:
+            self.trace.append((x, y, z, time.time()))
+
+        self.rafraichir_historique()
 
     # ==========================================
     # PROJECTION DES COORDONNEES 3D
@@ -438,6 +641,134 @@ class InterfaceGraphique:
             text="ENVIRONNEMENT 3D",
             fill=self.CYAN,
             font=("Arial", 12, "bold")
+        )
+
+    # ==========================================
+    # DESSIN DE LA DESTINATION ET DU TRAJET
+    # ==========================================
+
+    def dessiner_destination(self):
+
+        destination = self.lire_destination()
+
+        if destination is None:
+            return
+
+        x, y, z = destination
+
+        ecran_x, ecran_y = self.projeter(x, y, z)
+        sol_x, sol_y = self.projeter(x, y, 0)
+
+        # Liaison verticale avec le sol
+        self.canvas.create_line(
+            sol_x, sol_y,
+            ecran_x, ecran_y,
+            fill=self.ORANGE,
+            dash=(3, 3)
+        )
+
+        # Losange de destination
+        t = 9
+
+        self.canvas.create_polygon(
+            ecran_x, ecran_y - t,
+            ecran_x + t, ecran_y,
+            ecran_x, ecran_y + t,
+            ecran_x - t, ecran_y,
+            fill=self.ORANGE,
+            outline=self.BLANC,
+            width=2
+        )
+
+        self.canvas.create_text(
+            ecran_x,
+            ecran_y - t - 10,
+            text="DESTINATION",
+            fill=self.ORANGE,
+            font=("Arial", 9, "bold")
+        )
+
+    # Durée (en secondes) pendant laquelle le trait reste visible
+    DUREE_TRACE = 3.0
+
+    def melanger_couleur(self, depart, arrivee, t):
+        """Couleur intermédiaire entre deux couleurs #RRGGBB."""
+
+        c1 = [int(depart[i:i + 2], 16) for i in (1, 3, 5)]
+        c2 = [int(arrivee[i:i + 2], 16) for i in (1, 3, 5)]
+
+        return "#%02X%02X%02X" % tuple(
+            int(c1[k] + (c2[k] - c1[k]) * t) for k in range(3)
+        )
+
+    def dessiner_trajet(self):
+        """Trait derrière le robot : il s'estompe avec le temps."""
+
+        maintenant = time.time()
+
+        # Oublier les anciens points (on garde toujours le dernier)
+        self.trace = [
+            point for point in self.trace[:-1]
+            if maintenant - point[3] < self.DUREE_TRACE
+        ] + self.trace[-1:]
+
+        for i in range(1, len(self.trace)):
+            x1, y1, z1, _ = self.trace[i - 1]
+            x2, y2, z2, instant = self.trace[i]
+
+            age = maintenant - instant
+
+            if age >= self.DUREE_TRACE:
+                continue
+
+            # Plus le segment est ancien, plus il est sombre
+            force = 1 - age / self.DUREE_TRACE
+            couleur = self.melanger_couleur(
+                "#111827", self.CYAN, 0.1 + 0.9 * force
+            )
+
+            ecran_x1, ecran_y1 = self.projeter(x1, y1, z1)
+            ecran_x2, ecran_y2 = self.projeter(x2, y2, z2)
+
+            self.canvas.create_line(
+                ecran_x1, ecran_y1, ecran_x2, ecran_y2,
+                fill=couleur,
+                width=2
+            )
+
+    def boucle_trace(self):
+        """Redessine régulièrement tant que le trait s'estompe."""
+
+        visible = (
+            len(self.trace) >= 2
+            and time.time() - self.trace[-1][3] < self.DUREE_TRACE
+        )
+
+        if visible or self.trace_affichee:
+            self.actualiser()
+
+        self.trace_affichee = visible
+        self.fenetre.after(100, self.boucle_trace)
+
+    def dessiner_trajectoire_prevue(self):
+        """Chemin calculé par A* devant le robot (pointillés blancs)."""
+
+        if not self.auto_en_cours or not self.automatique.trajectoire:
+            return
+
+        points = [self.robot.obtenir_position()]
+        points.extend(self.automatique.trajectoire)
+
+        coordonnees = []
+
+        for x, y, z in points:
+            coordonnees.extend(self.projeter(x, y, z))
+
+        self.canvas.create_line(
+            *coordonnees,
+            fill=self.BLANC,
+            width=2,
+            dash=(2, 5)
         )
 
     # ==========================================
@@ -574,6 +905,25 @@ class InterfaceGraphique:
             )
         )
 
+        self.label_distance.config(
+            text=(
+                f"Distance parcourue : "
+                f"{self.historique.calculer_distance():.1f}"
+            )
+        )
+
+        self.label_nb_positions.config(
+            text=(
+                f"Positions enregistrées : "
+                f"{self.historique.nombre_positions()}"
+            )
+        )
+
+        if self.robot.actif:
+            self.label_etat.config(text="Robot : ACTIF", fg=self.VERT)
+        else:
+            self.label_etat.config(text="Robot : ARRÊTÉ", fg=self.ROUGE)
+
         distance = self.capteur.mesurer_distance(
             self.robot,
             self.simulation.obtenir_obstacles(),
@@ -603,7 +953,14 @@ class InterfaceGraphique:
     def commander(self, action):
 
         self.arreter_automatique()
-        self.robot.reprendre()
+
+        if not self.robot.actif:
+            self.afficher_statut(
+                "Robot à l'arrêt : appuyez sur REPRENDRE.",
+                self.ROUGE
+            )
+            self.actualiser()
+            return
 
         x, y, z = self.robot.obtenir_position()
 
@@ -657,6 +1014,7 @@ class InterfaceGraphique:
             )
         else:
             self.robot.definir_position(nx, ny, nz)
+            self.enregistrer(action.capitalize())
             self.afficher_statut(
                 "Déplacement effectué",
                 self.VERT
@@ -668,32 +1026,82 @@ class InterfaceGraphique:
     # MODE AUTOMATIQUE
     # ==========================================
 
-    def activer_automatique(self):
+    def activer_automatique(self, reprise=False):
 
-        try:
-            destination_x = float(self.entree_x.get())
-            destination_y = float(self.entree_y.get())
-            destination_z = float(self.entree_z.get())
+        if not self.robot.actif:
+            self.afficher_statut(
+                "Robot à l'arrêt : appuyez sur REPRENDRE.",
+                self.ROUGE
+            )
+            return
 
-        except ValueError:
+        destination = self.lire_destination()
+
+        if destination is None:
             self.afficher_statut(
                 "Veuillez saisir des coordonnées numériques.",
                 self.ROUGE
             )
             return
 
+        destination_x, destination_y, destination_z = destination
+        r = self.robot.rayon
+
+        largeur = self.simulation.largeur
+        hauteur = self.simulation.hauteur
+        profondeur = self.simulation.profondeur
+
+        # Hors de l'environnement : refusé
         if not (
-            0 <= destination_x <= self.simulation.largeur
-            and 0 <= destination_y <= self.simulation.hauteur
-            and 0 <= destination_z <= self.simulation.profondeur
+            0 <= destination_x <= largeur
+            and 0 <= destination_y <= hauteur
+            and 0 <= destination_z <= profondeur
         ):
-            self.afficher_statut(
-                "La destination dépasse les limites de l'environnement.",
-                self.ROUGE
+            message = (
+                f"Destination hors de l'environnement. "
+                f"X : 0 à {largeur}, Y : 0 à {hauteur}, "
+                f"Z : 0 à {profondeur}."
             )
+            self.afficher_statut(message, self.ROUGE)
+            messagebox.showwarning("Destination invalide", message)
             return
 
-        self.robot.reprendre()
+        # Trop près d'un bord : le robot ira au plus près
+        ajustee = (
+            min(max(destination_x, r), largeur - r),
+            min(max(destination_y, r), hauteur - r),
+            min(max(destination_z, r), profondeur - r)
+        )
+
+        if ajustee != (destination_x, destination_y, destination_z):
+            destination_x, destination_y, destination_z = ajustee
+
+            for entree, valeur in (
+                (self.entree_x, destination_x),
+                (self.entree_y, destination_y),
+                (self.entree_z, destination_z)
+            ):
+                entree.delete(0, tk.END)
+                entree.insert(0, self.formater(valeur))
+
+            messagebox.showinfo(
+                "Destination ajustée",
+                f"Le robot a un rayon de {r:g} et ne peut pas toucher "
+                f"les bords. Destination ajustée à "
+                f"X={self.formater(destination_x)}, "
+                f"Y={self.formater(destination_y)}, "
+                f"Z={self.formater(destination_z)}."
+            )
+
+        for obstacle in self.simulation.obtenir_obstacles():
+            if obstacle.verifier_collision(
+                destination_x, destination_y, destination_z, r
+            ):
+                self.afficher_statut(
+                    f"La destination se trouve dans {obstacle.identifiant}.",
+                    self.ROUGE
+                )
+                return
 
         self.automatique.definir_destination(
             destination_x,
@@ -711,6 +1119,13 @@ class InterfaceGraphique:
             return
 
         self.auto_en_cours = True
+        self.auto_interrompu = False
+        self.compteur_blocage = 0
+
+        # Nouveau trajet : le trait repart de la position actuelle
+        if not reprise:
+            x, y, z = self.robot.obtenir_position()
+            self.trace = [(x, y, z, time.time())]
         self.bouton_auto.config(text="AUTOMATIQUE EN COURS")
         self.afficher_statut(
             "Le robot se dirige vers sa destination.",
@@ -745,16 +1160,36 @@ class InterfaceGraphique:
             return
 
         elif decision == "OBSTACLE":
+            self.compteur_blocage += 1
+
+            # Le robot est bloqué depuis trop longtemps
+            if self.compteur_blocage >= 3:
+                self.arreter_automatique()
+                self.afficher_statut(
+                    "Robot bloqué : aucun passage vers la destination.",
+                    self.ROUGE
+                )
+                self.actualiser()
+                return
+
             self.afficher_statut(
                 "Obstacle détecté : recherche d'un passage.",
                 self.ORANGE
             )
 
         else:
-            self.afficher_statut(
-                f"Mode automatique : {decision}",
-                self.VERT
-            )
+            self.compteur_blocage = 0
+            self.enregistrer("Automatique")
+            if decision == "EVITER":
+                self.afficher_statut(
+                    "Obstacle détecté : le robot contourne l'obstacle.",
+                    self.ORANGE
+                )
+            else:
+                self.afficher_statut(
+                    "Le robot avance vers sa destination.",
+                    self.VERT
+                )
 
         self.actualiser()
 
@@ -771,13 +1206,17 @@ class InterfaceGraphique:
             self.fenetre.after_cancel(self.identifiant_boucle)
             self.identifiant_boucle = None
 
+        self.automatique.desactiver()
         self.bouton_auto.config(text="MODE AUTOMATIQUE")
 
     # ==========================================
-    # ARRET D'URGENCE
+    # ARRET D'URGENCE ET REPRISE
     # ==========================================
 
     def arreter(self):
+
+        # On retient si le mode automatique était en cours
+        self.auto_interrompu = self.auto_en_cours
 
         self.arreter_automatique()
         self.robot.arreter()
@@ -789,6 +1228,23 @@ class InterfaceGraphique:
 
         self.actualiser()
 
+    def reprendre(self):
+
+        self.robot.reprendre()
+
+        # Si le robot allait vers sa destination, il repart
+        if self.auto_interrompu:
+            self.auto_interrompu = False
+            self.activer_automatique(reprise=True)
+            return
+
+        self.afficher_statut(
+            "Robot repris : prêt à recevoir des commandes.",
+            self.VERT
+        )
+
+        self.actualiser()
+
     # ==========================================
     # REINITIALISATION
     # ==========================================
@@ -796,12 +1252,16 @@ class InterfaceGraphique:
     def reinitialiser(self):
 
         self.arreter_automatique()
+        self.auto_interrompu = False
 
         self.robot.reprendre()
-        
+
         self.robot.definir_position(*self.position_initiale)
         self.robot.angle = -90
         self.robot.angle_vertical = 0
+
+        self.historique.reinitialiser()
+        self.enregistrer("Réinitialisation", forcer=True)
 
         self.afficher_statut(
             "Robot réinitialisé.",
@@ -817,6 +1277,9 @@ class InterfaceGraphique:
     def actualiser(self):
 
         self.dessiner_simulation()
+        self.dessiner_destination()
+        self.dessiner_trajet()
+        self.dessiner_trajectoire_prevue()
         self.dessiner_robot()
         self.mettre_a_jour_informations()
 
@@ -832,8 +1295,332 @@ class InterfaceGraphique:
         )
 
     # ==========================================
+    # FENETRE D'HISTORIQUE
+    # ==========================================
+
+    def ouvrir_historique(self):
+
+        if (
+            self.fenetre_historique is not None
+            and self.fenetre_historique.winfo_exists()
+        ):
+            self.fenetre_historique.lift()
+            self.rafraichir_historique()
+            return
+
+        fen = tk.Toplevel(self.fenetre)
+        fen.title("Historique des déplacements")
+        fen.geometry("620x480")
+        fen.minsize(560, 360)
+        fen.configure(bg=self.FOND)
+
+        self.fenetre_historique = fen
+
+        tk.Label(
+            fen,
+            text="HISTORIQUE DES DÉPLACEMENTS",
+            font=("Arial", 15, "bold"),
+            bg=self.FOND,
+            fg=self.CYAN
+        ).pack(pady=12)
+
+        self.label_resume_historique = tk.Label(
+            fen,
+            text="",
+            font=("Arial", 10, "bold"),
+            bg=self.FOND,
+            fg=self.BLANC
+        )
+        self.label_resume_historique.pack(pady=(0, 8))
+
+        cadre_texte = tk.Frame(fen, bg=self.PANNEAU)
+        cadre_texte.pack(fill="both", expand=True, padx=15, pady=5)
+
+        barre = tk.Scrollbar(
+            cadre_texte,
+            orient="vertical",
+            bg="#475569",
+            troughcolor=self.PANNEAU,
+            activebackground=self.CYAN,
+            highlightthickness=0,
+            bd=0,
+            width=12
+        )
+        barre.pack(side="right", fill="y")
+
+        self.zone_historique = tk.Text(
+            cadre_texte,
+            bg="#111827",
+            fg=self.BLANC,
+            font=("Courier", 10),
+            relief="flat",
+            wrap="none",
+            state="disabled",
+            yscrollcommand=barre.set
+        )
+        self.zone_historique.pack(side="left", fill="both", expand=True)
+        barre.config(command=self.zone_historique.yview)
+
+        self.creer_bouton(
+            fen, "EFFACER L'HISTORIQUE", self.effacer_historique,
+            self.ORANGE
+        )
+        self.creer_bouton(
+            fen, "FERMER", fen.destroy,
+            "#475569"
+        )
+
+        self.rafraichir_historique()
+
+    def rafraichir_historique(self):
+
+        fen = self.fenetre_historique
+
+        if fen is None or not fen.winfo_exists():
+            return
+
+        lignes = self.historique.afficher_parcours()
+
+        self.zone_historique.config(state="normal")
+        self.zone_historique.delete("1.0", tk.END)
+        self.zone_historique.insert(tk.END, "\n".join(lignes))
+        self.zone_historique.config(state="disabled")
+        self.zone_historique.see(tk.END)
+
+        self.label_resume_historique.config(
+            text=(
+                f"{self.historique.nombre_positions()} positions  |  "
+                f"Distance totale : "
+                f"{self.historique.calculer_distance():.1f}"
+            )
+        )
+
+    def effacer_historique(self):
+
+        self.historique.reinitialiser()
+        self.enregistrer("Départ", forcer=True)
+        self.afficher_statut("Historique effacé.", self.ORANGE)
+        self.actualiser()
+
+    # ==========================================
+    # FENETRE DE GESTION DES OBSTACLES
+    # ==========================================
+
+    def ouvrir_obstacles(self):
+
+        if (
+            self.fenetre_obstacles is not None
+            and self.fenetre_obstacles.winfo_exists()
+        ):
+            self.fenetre_obstacles.lift()
+            self.rafraichir_liste_obstacles()
+            return
+
+        fen = tk.Toplevel(self.fenetre)
+        fen.title("Gestion des obstacles")
+        fen.geometry("480x600")
+        fen.minsize(480, 560)
+        fen.configure(bg=self.FOND)
+
+        self.fenetre_obstacles = fen
+
+        tk.Label(
+            fen,
+            text="GESTION DES OBSTACLES",
+            font=("Arial", 15, "bold"),
+            bg=self.FOND,
+            fg=self.CYAN
+        ).pack(pady=12)
+
+        self.liste_obstacles = tk.Listbox(
+            fen,
+            height=7,
+            bg="#111827",
+            fg=self.BLANC,
+            selectbackground=self.ORANGE,
+            selectforeground="#FFFFFF",
+            font=("Courier", 10),
+            relief="flat",
+            highlightthickness=0,
+            exportselection=False
+        )
+        self.liste_obstacles.pack(fill="x", padx=15, pady=5)
+
+        self.creer_bouton(
+            fen, "SUPPRIMER L'OBSTACLE SÉLECTIONNÉ",
+            self.supprimer_obstacle_interface,
+            self.ROUGE
+        )
+
+        tk.Label(
+            fen,
+            text="NOUVEL OBSTACLE",
+            font=("Arial", 11, "bold"),
+            bg=self.FOND,
+            fg=self.ORANGE
+        ).pack(pady=(15, 5))
+
+        cadre_position = tk.Frame(fen, bg=self.FOND)
+        cadre_position.pack(pady=5)
+
+        self.nouvel_obstacle_x = self.creer_champ(
+            cadre_position, "X", "400", 0
+        )
+        self.nouvel_obstacle_y = self.creer_champ(
+            cadre_position, "Y", "300", 1
+        )
+        self.nouvel_obstacle_z = self.creer_champ(
+            cadre_position, "Z", "0", 2
+        )
+        self.nouvel_obstacle_rayon = self.creer_champ(
+            cadre_position, "Rayon", "50", 3
+        )
+
+        self.creer_bouton(
+            fen, "AJOUTER L'OBSTACLE",
+            self.ajouter_obstacle_interface,
+            self.VERT
+        )
+        self.creer_bouton(
+            fen, "FERMER", fen.destroy,
+            "#475569"
+        )
+
+        self.rafraichir_liste_obstacles()
+
+    def rafraichir_liste_obstacles(self):
+
+        fen = self.fenetre_obstacles
+
+        if fen is None or not fen.winfo_exists():
+            return
+
+        self.liste_obstacles.delete(0, tk.END)
+
+        for obstacle in self.simulation.obtenir_obstacles():
+            self.liste_obstacles.insert(
+                tk.END,
+                f"{obstacle.identifiant:<4} "
+                f"X={self.formater(obstacle.x)} "
+                f"Y={self.formater(obstacle.y)} "
+                f"Z={self.formater(obstacle.z)} "
+                f"R={self.formater(obstacle.rayon)}"
+            )
+
+    def nouvel_identifiant(self):
+        """Premier identifiant libre : O1, O2, O3..."""
+
+        utilises = {
+            obstacle.identifiant
+            for obstacle in self.simulation.obtenir_obstacles()
+        }
+
+        numero = 1
+
+        while f"O{numero}" in utilises:
+            numero += 1
+
+        return f"O{numero}"
+
+    def ajouter_obstacle_interface(self):
+
+        fen = self.fenetre_obstacles
+
+        try:
+            x = float(self.nouvel_obstacle_x.get())
+            y = float(self.nouvel_obstacle_y.get())
+            z = float(self.nouvel_obstacle_z.get())
+            rayon = float(self.nouvel_obstacle_rayon.get())
+
+        except ValueError:
+            messagebox.showerror(
+                "Erreur",
+                "Tous les champs doivent contenir des nombres.",
+                parent=fen
+            )
+            return
+
+        identifiant = self.nouvel_identifiant()
+        r = self.robot.rayon
+
+        test = Obstacle(identifiant, x, y, z, rayon)
+
+        if test.verifier_collision(*self.robot.obtenir_position(), r):
+            messagebox.showerror(
+                "Erreur",
+                "Le robot se trouve dans cette zone.",
+                parent=fen
+            )
+            return
+
+        destination = self.lire_destination()
+
+        if destination is not None and test.verifier_collision(
+            *destination, r
+        ):
+            messagebox.showerror(
+                "Erreur",
+                "La destination se trouve dans cette zone.",
+                parent=fen
+            )
+            return
+
+        try:
+            self.simulation.ajouter_obstacle(
+                identifiant, x, y, z, rayon
+            )
+        except ValueError as erreur:
+            messagebox.showerror("Erreur", str(erreur), parent=fen)
+            return
+
+        self.afficher_statut(
+            f"Obstacle {identifiant} ajouté.",
+            self.VERT
+        )
+        self.rafraichir_liste_obstacles()
+        self.actualiser()
+
+    def supprimer_obstacle_interface(self):
+
+        selection = self.liste_obstacles.curselection()
+
+        if not selection:
+            messagebox.showinfo(
+                "Information",
+                "Sélectionnez d'abord un obstacle dans la liste.",
+                parent=self.fenetre_obstacles
+            )
+            return
+
+        obstacles = self.simulation.obtenir_obstacles()
+        identifiant = obstacles[selection[0]].identifiant
+
+        self.simulation.supprimer_obstacle(identifiant)
+
+        self.afficher_statut(
+            f"Obstacle {identifiant} supprimé.",
+            self.ORANGE
+        )
+        self.rafraichir_liste_obstacles()
+        self.actualiser()
+
+    # ==========================================
     # FENETRE DE CONFIGURATION
     # ==========================================
+
+    def valeurs_obstacle(self, identifiant, defaut):
+        """Valeurs actuelles de l'obstacle (x, y, z, rayon) en texte."""
+
+        for obstacle in self.simulation.obtenir_obstacles():
+            if obstacle.identifiant == identifiant:
+                return tuple(
+                    self.formater(valeur)
+                    for valeur in (
+                        obstacle.x, obstacle.y, obstacle.z, obstacle.rayon
+                    )
+                )
+
+        return defaut
 
     def ouvrir_configuration(self):
 
@@ -854,13 +1641,19 @@ class InterfaceGraphique:
 
         tk.Label(
             fenetre_config,
-            text="Cette fenêtre permettra de définir les coordonnées du robot, de l'obstacle et de la destination.",
-            wraplength=350,
+            text=(
+                "Définissez le robot, les obstacles O1 et O2 et la "
+                "destination. Appliquer remplace les obstacles actuels."
+            ),
+            wraplength=400,
             bg=self.FOND,
             fg=self.BLANC
-        ).pack(pady=10)
-        
-# POSITION INITIALE DU ROBOT
+        ).pack(pady=5)
+
+        o1 = self.valeurs_obstacle("O1", ("450", "200", "0", "71"))
+        o2 = self.valeurs_obstacle("O2", ("275", "435", "0", "83"))
+
+        # POSITION INITIALE DU ROBOT
 
         tk.Label(
             fenetre_config,
@@ -877,22 +1670,25 @@ class InterfaceGraphique:
         cadre_robot.pack(pady=5)
 
         self.config_robot_x = self.creer_champ(
-            cadre_robot, "Robot X", str(self.robot.x), 0
+            cadre_robot, "Robot X",
+            self.formater(self.position_initiale[0]), 0
         )
 
         self.config_robot_y = self.creer_champ(
-            cadre_robot, "Robot Y", str(self.robot.y), 1
+            cadre_robot, "Robot Y",
+            self.formater(self.position_initiale[1]), 1
         )
 
         self.config_robot_z = self.creer_champ(
-            cadre_robot, "Robot Z", str(self.robot.z), 2
+            cadre_robot, "Robot Z",
+            self.formater(self.position_initiale[2]), 2
         )
 
         # POSITION DE L'OBSTACLE
 
         tk.Label(
             fenetre_config,
-            text="POSITION DE L'OBSTACLE",
+            text="POSITION DE L'OBSTACLE O1",
             font=("Arial", 11, "bold"),
             bg=self.FOND,
             fg=self.ORANGE
@@ -905,15 +1701,15 @@ class InterfaceGraphique:
         cadre_obstacle.pack(pady=5)
 
         self.config_obstacle_x = self.creer_champ(
-            cadre_obstacle, "Obstacle X", "450", 0
+            cadre_obstacle, "Obstacle X", o1[0], 0
         )
 
         self.config_obstacle_y = self.creer_champ(
-            cadre_obstacle, "Obstacle Y", "200", 1
+            cadre_obstacle, "Obstacle Y", o1[1], 1
         )
 
         self.config_obstacle_z = self.creer_champ(
-            cadre_obstacle, "Obstacle Z", "40", 2
+            cadre_obstacle, "Obstacle Z", o1[2], 2
         )
 
         cadre_rayon = tk.Frame(
@@ -923,14 +1719,14 @@ class InterfaceGraphique:
         cadre_rayon.pack(pady=5)
 
         self.config_obstacle_rayon = self.creer_champ(
-            cadre_rayon, "Rayon", "30", 0
+            cadre_rayon, "Rayon", o1[3], 0
         )
 
-# POSITION DU DEUXIÈME OBSTACLE
+        # POSITION DU DEUXIÈME OBSTACLE
 
         tk.Label(
             fenetre_config,
-            text="POSITION DU DEUXIÈME OBSTACLE",
+            text="POSITION DU DEUXIÈME OBSTACLE O2",
             font=("Arial", 11, "bold"),
             bg=self.FOND,
             fg=self.ORANGE
@@ -943,15 +1739,15 @@ class InterfaceGraphique:
         cadre_obstacle2.pack(pady=5)
 
         self.config_obstacle2_x = self.creer_champ(
-            cadre_obstacle2, "Obstacle 2 X", "275", 0
+            cadre_obstacle2, "Obstacle 2 X", o2[0], 0
         )
 
         self.config_obstacle2_y = self.creer_champ(
-            cadre_obstacle2, "Obstacle 2 Y", "435", 1
+            cadre_obstacle2, "Obstacle 2 Y", o2[1], 1
         )
 
         self.config_obstacle2_z = self.creer_champ(
-            cadre_obstacle2, "Obstacle 2 Z", "0", 2
+            cadre_obstacle2, "Obstacle 2 Z", o2[2], 2
         )
 
         cadre_rayon2 = tk.Frame(
@@ -961,7 +1757,7 @@ class InterfaceGraphique:
         cadre_rayon2.pack(pady=5)
 
         self.config_obstacle2_rayon = self.creer_champ(
-            cadre_rayon2, "Rayon 2", "83", 0
+            cadre_rayon2, "Rayon 2", o2[3], 0
         )
 
         # DESTINATION DU ROBOT
@@ -981,15 +1777,15 @@ class InterfaceGraphique:
         cadre_destination.pack(pady=5)
 
         self.config_destination_x = self.creer_champ(
-            cadre_destination, "Destination X", "700", 0
+            cadre_destination, "Destination X", self.entree_x.get(), 0
         )
 
         self.config_destination_y = self.creer_champ(
-            cadre_destination, "Destination Y", "300", 1
+            cadre_destination, "Destination Y", self.entree_y.get(), 1
         )
 
         self.config_destination_z = self.creer_champ(
-            cadre_destination, "Destination Z", "40", 2
+            cadre_destination, "Destination Z", self.entree_z.get(), 2
         )
 
         # BOUTON POUR APPLIQUER LA CONFIGURATION
@@ -1029,15 +1825,45 @@ class InterfaceGraphique:
         except ValueError:
             messagebox.showerror(
                 "Erreur",
-                "Tous les champs doivent contenir des nombres."
+                "Tous les champs doivent contenir des nombres.",
+                parent=fenetre_config
             )
             return
+
+        # La destination est ramenée à la zone atteignable par le robot
+        rayon_robot = self.robot.rayon
+
+        if not (
+            0 <= destination_x <= self.simulation.largeur
+            and 0 <= destination_y <= self.simulation.hauteur
+            and 0 <= destination_z <= self.simulation.profondeur
+        ):
+            messagebox.showerror(
+                "Erreur",
+                "La destination est hors de l'environnement.",
+                parent=fenetre_config
+            )
+            return
+
+        destination_x = min(
+            max(destination_x, rayon_robot),
+            self.simulation.largeur - rayon_robot
+        )
+        destination_y = min(
+            max(destination_y, rayon_robot),
+            self.simulation.hauteur - rayon_robot
+        )
+        destination_z = min(
+            max(destination_z, rayon_robot),
+            self.simulation.profondeur - rayon_robot
+        )
 
         # 5. Vérifier les rayons
         if obstacle_rayon <= 0 or obstacle2_rayon <= 0:
             messagebox.showerror(
                 "Erreur",
-                "Les rayons doivent être positifs."
+                "Les rayons doivent être positifs.",
+                parent=fenetre_config
             )
             return
 
@@ -1055,7 +1881,8 @@ class InterfaceGraphique:
             ):
                 messagebox.showerror(
                     "Erreur",
-                    f"La position du {nom} dépasse les limites."
+                    f"La position du {nom} dépasse les limites.",
+                    parent=fenetre_config
                 )
                 return
 
@@ -1071,13 +1898,12 @@ class InterfaceGraphique:
             ):
                 messagebox.showerror(
                     "Erreur",
-                    f"La position de {nom} est invalide."
+                    f"La position de {nom} est invalide.",
+                    parent=fenetre_config
                 )
                 return
 
         # 8. Créer les deux obstacles pour les vérifications
-        from obstacle import Obstacle
-
         obstacles_test = [
             Obstacle(
                 "O1", obstacle_x, obstacle_y,
@@ -1097,7 +1923,8 @@ class InterfaceGraphique:
             ):
                 messagebox.showerror(
                     "Erreur",
-                    f"Le robot commence dans {obstacle.identifiant}."
+                    f"Le robot commence dans {obstacle.identifiant}.",
+                    parent=fenetre_config
                 )
                 return
 
@@ -1106,13 +1933,14 @@ class InterfaceGraphique:
             ):
                 messagebox.showerror(
                     "Erreur",
-                    f"La destination se trouve dans {obstacle.identifiant}."
+                    f"La destination se trouve dans {obstacle.identifiant}.",
+                    parent=fenetre_config
                 )
                 return
 
         # 10. Arrêter le déplacement automatique
         self.arreter_automatique()
-        self.automatique.desactiver()
+        self.auto_interrompu = False
 
         # 11. Placer le robot
         self.robot.reprendre()
@@ -1126,7 +1954,6 @@ class InterfaceGraphique:
         # 12. Remplacer les anciens obstacles
         self.simulation.obstacles = []
 
-        # Ajouter O1
         self.simulation.ajouter_obstacle(
             "O1",
             obstacle_x,
@@ -1135,7 +1962,6 @@ class InterfaceGraphique:
             obstacle_rayon
         )
 
-        # Ajouter O2
         self.simulation.ajouter_obstacle(
             "O2",
             obstacle2_x,
@@ -1153,13 +1979,13 @@ class InterfaceGraphique:
 
         # 14. Mettre à jour la destination
         self.entree_x.delete(0, tk.END)
-        self.entree_x.insert(0, str(destination_x))
+        self.entree_x.insert(0, self.formater(destination_x))
 
         self.entree_y.delete(0, tk.END)
-        self.entree_y.insert(0, str(destination_y))
+        self.entree_y.insert(0, self.formater(destination_y))
 
         self.entree_z.delete(0, tk.END)
-        self.entree_z.insert(0, str(destination_z))
+        self.entree_z.insert(0, self.formater(destination_z))
 
         self.automatique.definir_destination(
             destination_x,
@@ -1167,7 +1993,12 @@ class InterfaceGraphique:
             destination_z
         )
 
-        # 15. Actualiser l'affichage
+        # 15. Nouvel historique pour le nouveau scénario
+        self.historique.reinitialiser()
+        self.enregistrer("Nouveau scénario", forcer=True)
+        self.rafraichir_liste_obstacles()
+
+        # 16. Actualiser l'affichage
         self.actualiser()
 
         self.afficher_statut(
@@ -1177,8 +2008,8 @@ class InterfaceGraphique:
 
         messagebox.showinfo(
             "Configuration réussie",
-            "Les deux obstacles ont été ajoutés."
+            "Les deux obstacles ont été ajoutés.",
+            parent=fenetre_config
         )
 
         fenetre_config.destroy()
-   

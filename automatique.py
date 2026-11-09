@@ -1,11 +1,19 @@
+import heapq
 import math
 
 
 class Automatique:
     """
     Contrôleur automatique du robot 3D.
-    Recherche une direction libre pour atteindre la destination.
+
+    Il calcule une trajectoire sans collision avec l'algorithme A*
+    sur une grille 3D, la simplifie (lignes droites quand c'est possible),
+    puis fait avancer le robot pas à pas le long de cette trajectoire.
+    Si un obstacle apparaît sur le chemin, la trajectoire est recalculée.
     """
+
+    # Taille d'une case de la grille de recherche A*
+    PAS_GRILLE = 20
 
     def __init__(self, robot, capteur, simulation):
         self.robot = robot
@@ -18,6 +26,13 @@ class Automatique:
         self.destination = None
         self.tolerance = 3
 
+        # Points restant à atteindre (le dernier est la destination)
+        self.trajectoire = []
+
+    # ==========================================
+    # DESTINATION ET ETAT
+    # ==========================================
+
     def definir_destination(self, x, y, z):
         if not (
             0 <= x <= self.simulation.largeur
@@ -27,6 +42,7 @@ class Automatique:
             raise ValueError("Destination en dehors de l'environnement.")
 
         self.destination = (x, y, z)
+        self.trajectoire = []
         self.message = f"Destination définie : {self.destination}"
 
     def activer(self):
@@ -34,134 +50,305 @@ class Automatique:
             self.message = "Veuillez définir une destination."
             return
 
+        self.trajectoire = []
         self.actif = True
         self.message = "Mode automatique activé"
 
     def desactiver(self):
         self.actif = False
+        self.trajectoire = []
         self.message = "Mode automatique désactivé"
+
+    # ==========================================
+    # OUTILS
+    # ==========================================
+
+    @staticmethod
+    def _distance(a, b):
+        return math.sqrt(
+            (b[0] - a[0]) ** 2
+            + (b[1] - a[1]) ** 2
+            + (b[2] - a[2]) ** 2
+        )
 
     def calculer_distance_destination(self):
         if self.destination is None:
             return 0
 
-        x, y, z = self.destination
-
-        return math.sqrt(
-            (x - self.robot.x) ** 2
-            + (y - self.robot.y) ** 2
-            + (z - self.robot.z) ** 2
+        return self._distance(
+            self.robot.obtenir_position(), self.destination
         )
+
+    def _libre(self, x, y, z):
+        """Vrai si le robot peut se trouver à cette position."""
+        return not self.simulation.verifier_collision(
+            self.robot, x, y, z
+        )
+
+    def _segment_libre(self, a, b):
+        """Vrai si le robot peut aller en ligne droite de a à b."""
+
+        longueur = self._distance(a, b)
+        etapes = max(1, int(longueur / 5))
+
+        for i in range(1, etapes + 1):
+            t = i / etapes
+
+            if not self._libre(
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                a[2] + (b[2] - a[2]) * t
+            ):
+                return False
+
+        return True
+
+    # ==========================================
+    # CALCUL DE LA TRAJECTOIRE (A*)
+    # ==========================================
+
+    def calculer_trajectoire(self):
+        """
+        Calcule une trajectoire sans collision entre la position
+        du robot et la destination. Retourne True si elle existe.
+        """
+
+        depart = self.robot.obtenir_position()
+        arrivee = self.destination
+
+        # 1. Si la ligne droite est libre, pas besoin de chercher
+        if self._segment_libre(depart, arrivee):
+            self.trajectoire = [arrivee]
+            return True
+
+        # 2. Sinon, A* sur une grille 3D ancrée sur le robot
+        pas = self.PAS_GRILLE
+
+        def position(noeud):
+            return (
+                depart[0] + noeud[0] * pas,
+                depart[1] + noeud[1] * pas,
+                depart[2] + noeud[2] * pas
+            )
+
+        cache = {}
+
+        def libre(noeud):
+            if noeud not in cache:
+                cache[noeud] = self._libre(*position(noeud))
+            return cache[noeud]
+
+        # Case d'arrivée : la case libre la plus proche de la destination
+        centre = tuple(
+            round((arrivee[i] - depart[i]) / pas) for i in range(3)
+        )
+
+        candidats = sorted(
+            (
+                (centre[0] + a, centre[1] + b, centre[2] + c)
+                for a in (-1, 0, 1)
+                for b in (-1, 0, 1)
+                for c in (-1, 0, 1)
+            ),
+            key=lambda n: self._distance(position(n), arrivee)
+        )
+
+        but = next((n for n in candidats if libre(n)), None)
+
+        if but is None:
+            return False
+
+        position_but = position(but)
+
+        def heuristique(noeud):
+            return self._distance(position(noeud), position_but)
+
+        voisins = [
+            (a, b, c)
+            for a in (-1, 0, 1)
+            for b in (-1, 0, 1)
+            for c in (-1, 0, 1)
+            if (a, b, c) != (0, 0, 0)
+        ]
+        couts = {
+            v: math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2) * pas
+            for v in voisins
+        }
+
+        origine = (0, 0, 0)
+        ouvert = [(heuristique(origine), 0.0, origine)]
+        meilleur_cout = {origine: 0.0}
+        parent = {}
+        ferme = set()
+
+        while ouvert:
+            _, cout, noeud = heapq.heappop(ouvert)
+
+            if noeud in ferme:
+                continue
+
+            ferme.add(noeud)
+
+            if noeud == but:
+                break
+
+            for v in voisins:
+                suivant = (
+                    noeud[0] + v[0],
+                    noeud[1] + v[1],
+                    noeud[2] + v[2]
+                )
+
+                if suivant in ferme or not libre(suivant):
+                    continue
+
+                nouveau_cout = cout + couts[v]
+
+                if nouveau_cout < meilleur_cout.get(suivant, float("inf")):
+                    meilleur_cout[suivant] = nouveau_cout
+                    parent[suivant] = noeud
+                    heapq.heappush(
+                        ouvert,
+                        (
+                            nouveau_cout + heuristique(suivant),
+                            nouveau_cout,
+                            suivant
+                        )
+                    )
+        else:
+            # La recherche s'est terminée sans atteindre la case d'arrivée
+            return False
+
+        # 3. Reconstruire le chemin
+        chemin = [but]
+
+        while chemin[-1] != origine:
+            chemin.append(parent[chemin[-1]])
+
+        chemin.reverse()
+
+        points = (
+            [depart]
+            + [position(n) for n in chemin[1:]]
+            + [arrivee]
+        )
+
+        # 4. Simplifier : sauter les points inutiles
+        simplifie = [points[0]]
+        i = 0
+
+        while i < len(points) - 1:
+            j = len(points) - 1
+
+            while j > i + 1 and not self._segment_libre(
+                points[i], points[j]
+            ):
+                j -= 1
+
+            simplifie.append(points[j])
+            i = j
+
+        self.trajectoire = simplifie[1:]
+        return True
+
+    # ==========================================
+    # SUIVI DE LA TRAJECTOIRE
+    # ==========================================
+
+    def _nettoyer_trajectoire(self):
+        """Retire les points déjà atteints."""
+
+        position = self.robot.obtenir_position()
+
+        while self.trajectoire and self._distance(
+            position, self.trajectoire[0]
+        ) < 1e-6:
+            self.trajectoire.pop(0)
+
+    def _pas(self):
+        """Déplacement (dx, dy, dz) vers le prochain point."""
+
+        position = self.robot.obtenir_position()
+        cible = self.trajectoire[0]
+        distance = self._distance(position, cible)
+
+        if distance < 1e-9:
+            return (0, 0, 0)
+
+        pas = min(self.robot.vitesse, distance)
+        facteur = pas / distance
+
+        return (
+            (cible[0] - position[0]) * facteur,
+            (cible[1] - position[1]) * facteur,
+            (cible[2] - position[2]) * facteur
+        )
+
+    def _pas_libre(self):
+        """Vrai si le prochain pas ne provoque pas de collision."""
+
+        x, y, z = self.robot.obtenir_position()
+        dx, dy, dz = self._pas()
+
+        return self._libre(x + dx, y + dy, z + dz)
 
     def prendre_decision(self):
         if not self.actif or self.destination is None:
             return "ARRET"
 
-        distance_destination = self.calculer_distance_destination()
-
-        if distance_destination <= self.tolerance:
+        if self.calculer_distance_destination() <= self.tolerance:
             self.actif = False
+            self.trajectoire = []
             self.message = "Destination atteinte !"
             return "DESTINATION_ATTEINTE"
 
-        # Calcul de la direction vers la destination
-        dx = self.destination[0] - self.robot.x
-        dy = self.destination[1] - self.robot.y
-        dz = self.destination[2] - self.robot.z
+        self._nettoyer_trajectoire()
 
-        distance_horizontale = math.sqrt(dx ** 2 + dy ** 2)
+        # Calculer (ou recalculer) la trajectoire si nécessaire
+        if not self.trajectoire or not self._pas_libre():
 
-        angle_voulu = math.degrees(math.atan2(dy, dx))
-        angle_vertical = math.degrees(
-            math.atan2(dz, distance_horizontale)
+            if not self.calculer_trajectoire():
+                self.trajectoire = []
+                self.message = "Aucun passage libre détecté"
+                return "OBSTACLE"
+
+            self._nettoyer_trajectoire()
+
+            if not self.trajectoire or not self._pas_libre():
+                self.trajectoire = []
+                self.message = "Déplacement bloqué par sécurité"
+                return "OBSTACLE"
+
+        # Orienter le robot vers le prochain point
+        x, y, z = self.robot.obtenir_position()
+        cible = self.trajectoire[0]
+
+        dx = cible[0] - x
+        dy = cible[1] - y
+        dz = cible[2] - z
+        distance_h = math.sqrt(dx ** 2 + dy ** 2)
+
+        if distance_h > 1e-9:
+            self.robot.angle = math.degrees(math.atan2(dy, dx)) % 360
+
+        self.robot.angle_vertical = math.degrees(
+            math.atan2(dz, distance_h)
         )
 
-        # Directions que le robot peut essayer
-        decalages = [
-            0, 15, -15, 30, -30, 45, -45,
-            60, -60, 90, -90, 135, -135, 180
-        ]
+        # Comparer avec la direction directe vers la destination
+        ex = self.destination[0] - x
+        ey = self.destination[1] - y
+        ez = self.destination[2] - z
 
-        meilleure_score = float("inf")
-        meilleur_angle = None
-        meilleur_vertical = angle_vertical
+        angle_voulu = math.degrees(math.atan2(ey, ex))
+        vertical_voulu = math.degrees(
+            math.atan2(ez, math.sqrt(ex ** 2 + ey ** 2))
+        )
 
-        pas = min(self.robot.vitesse, distance_destination)
+        ecart_h = abs((self.robot.angle - angle_voulu + 180) % 360 - 180)
+        ecart_v = abs(self.robot.angle_vertical - vertical_voulu)
 
-        for decalage in decalages:
-
-            angle = (angle_voulu + decalage) % 360
-
-            angle_rad = math.radians(angle)
-            vertical_rad = math.radians(angle_vertical)
-
-            # Calcul du prochain déplacement
-            mouvement_x = (
-                pas * math.cos(vertical_rad) * math.cos(angle_rad)
-            )
-            mouvement_y = (
-                pas * math.cos(vertical_rad) * math.sin(angle_rad)
-            )
-            mouvement_z = pas * math.sin(vertical_rad)
-
-            nouveau_x = self.robot.x + mouvement_x
-            nouveau_y = self.robot.y + mouvement_y
-            nouveau_z = self.robot.z + mouvement_z
-
-            # Vérifier si le déplacement provoquerait une collision
-            if self.simulation.verifier_collision(
-                self.robot, nouveau_x, nouveau_y, nouveau_z
-            ):
-                continue
-
-            # Tester la visibilité dans cette direction
-            ancien_angle = self.robot.angle
-            ancien_angle_vertical = self.robot.angle_vertical
-
-            self.robot.angle = angle
-            self.robot.angle_vertical = angle_vertical
-
-            distance_capteur = self.capteur.mesurer_distance(
-                self.robot,
-                self.simulation.obtenir_obstacles(),
-                self.simulation.largeur,
-                self.simulation.hauteur,
-                self.simulation.profondeur
-            )
-
-            # Restaurer les anciennes directions
-            self.robot.angle = ancien_angle
-            self.robot.angle_vertical = ancien_angle_vertical
-             
-
-            # Ne pas choisir une direction immédiatement bloquée
-            if distance_capteur <= self.robot.rayon:
-                continue
-
-            # Calculer la distance restante après ce déplacement
-            distance_restante = math.sqrt(
-                (self.destination[0] - nouveau_x) ** 2
-                + (self.destination[1] - nouveau_y) ** 2
-                + (self.destination[2] - nouveau_z) ** 2
-            )
-
-            # Privilégier la progression et les petits changements d'angle
-            score = distance_restante + abs(decalage) * 0.05
-
-            if score < meilleure_score:
-                meilleure_score = score
-                meilleur_angle = angle
-                meilleur_vertical = angle_vertical
-
-        if meilleur_angle is None:
-            self.message = "Aucun passage libre détecté"
-            return "OBSTACLE"
-
-        # Appliquer la meilleure direction
-        self.robot.angle = meilleur_angle
-        self.robot.angle_vertical = meilleur_vertical
-
-        if abs((meilleur_angle - angle_voulu + 180) % 360 - 180) > 1:
+        if ecart_h > 1 or ecart_v > 1:
             return "EVITER"
 
         return "AVANCER"
@@ -171,33 +358,23 @@ class Automatique:
 
         if decision in ("AVANCER", "EVITER"):
 
-            distance = self.calculer_distance_destination()
-            vitesse = min(self.robot.vitesse, distance)
+            x, y, z = self.robot.obtenir_position()
+            dx, dy, dz = self._pas()
 
-            angle_h = math.radians(self.robot.angle)
-            angle_v = math.radians(self.robot.angle_vertical)
-
-            dx = vitesse * math.cos(angle_v) * math.cos(angle_h)
-            dy = vitesse * math.cos(angle_v) * math.sin(angle_h)
-            dz = vitesse * math.sin(angle_v)
-
-            nouveau_x = self.robot.x + dx
-            nouveau_y = self.robot.y + dy
-            nouveau_z = self.robot.z + dz
-
-            if not self.simulation.verifier_collision(
-                self.robot, nouveau_x, nouveau_y, nouveau_z
+            if self.simulation.verifier_collision(
+                self.robot, x + dx, y + dy, z + dz
             ):
-                self.robot.deplacer(dx, dy, dz)
-
-                if decision == "EVITER":
-                    self.message = "Obstacle détecté : changement de direction"
-                else:
-                    self.message = "Robot en déplacement automatique"
-
-            else:
+                self.trajectoire = []
                 self.message = "Déplacement bloqué par sécurité"
                 return "OBSTACLE"
+
+            self.robot.deplacer(dx, dy, dz)
+            self._nettoyer_trajectoire()
+
+            if decision == "EVITER":
+                self.message = "Obstacle détecté : changement de direction"
+            else:
+                self.message = "Robot en déplacement automatique"
 
         elif decision == "DESTINATION_ATTEINTE":
             self.message = "Destination atteinte !"
